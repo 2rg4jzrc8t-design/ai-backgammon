@@ -1,0 +1,463 @@
+
+
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+
+<meta name="theme-color" content="#173d32">
+
+<title>AI Backgammon</title>
+
+<style>
+
+*{box-sizing:border-box}
+
+body{margin:0;background:#173d32;color:#fff;font-family:system-ui,Arial,sans-serif;text-align:center}
+
+header{padding:14px 8px 8px}
+
+h1{margin:0;font-size:26px}
+
+#status{min-height:42px;padding:8px;font-weight:600}
+
+.controls{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;padding:8px}
+
+button{border:0;border-radius:10px;padding:11px 16px;font-weight:bold;font-size:15px;cursor:pointer}
+
+.primary{background:#f0c66b;color:#282116}
+
+.secondary{background:#fff;color:#173d32}
+
+#board{width:min(96vw,650px);margin:8px auto;background:#9a5935;border:7px solid #522d20;border-radius:9px;padding:7px;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:3px;box-shadow:0 5px 18px #0005}
+
+.point{height:clamp(110px,27vw,190px);position:relative;display:flex;flex-direction:column;align-items:center;cursor:pointer;overflow:hidden;background:#bd8758}
+
+.point:nth-child(odd){background:#d3a16d}
+
+.point.selected{outline:4px solid #ffeb72;outline-offset:-4px}
+
+.triangle{position:absolute;top:0;left:0;width:0;height:0;border-left:calc((96vw - 90px)/24) solid transparent;border-right:calc((96vw - 90px)/24) solid transparent;border-top:clamp(65px,17vw,120px) solid #8c3027;pointer-events:none}
+
+.point.bottom .triangle{top:auto;bottom:0;border-top:0;border-bottom:clamp(65px,17vw,120px) solid #8c3027}
+
+.point:nth-child(3n) .triangle{border-top-color:#e6c39a}
+
+.point.bottom:nth-child(3n) .triangle{border-bottom-color:#e6c39a}
+
+.stack{z-index:1;display:flex;flex-direction:column;align-items:center;width:100%;gap:1px}
+
+.bottom .stack{margin-top:auto;flex-direction:column-reverse}
+
+.checker{width:min(7vw,34px);height:min(7vw,34px);border-radius:50%;border:2px solid #eee;box-shadow:0 1px 3px #0008;flex-shrink:0}
+
+.white{background:#fff4d9;border-color:#d6c7a5}
+
+.black{background:#242424;border-color:#666}
+
+.count{position:absolute;z-index:3;top:45%;font-size:12px;font-weight:900;color:#fff;text-shadow:0 1px 3px #000,0 1px 3px #000}
+
+.bottom .count{top:45%}
+
+.label{position:absolute;z-index:4;bottom:2px;font-size:10px;color:#fff;text-shadow:0 1px 3px #000}
+
+.barline{width:min(96vw,650px);margin:auto;display:flex;justify-content:space-around;background:#522d20;padding:8px;border-radius:6px}
+
+.barbox{min-width:90px;padding:5px}
+
+.dice{font-size:30px;letter-spacing:5px;min-height:42px}
+
+#message{padding:12px;min-height:45px}
+
+footer{font-size:12px;padding:12px;color:#d7e2db}
+
+</style>
+
+</head>
+
+<body>
+
+<header>
+
+<h1>🎲 AI Backgammon</h1>
+
+<div>Play against the computer</div>
+
+</header>
+
+<div id="status">Tap Roll Dice to begin.</div>
+
+<div class="controls">
+
+<button class="primary" id="roll">🎲 Roll Dice</button>
+
+<button class="secondary" id="undo">Clear Selection</button>
+
+<button class="secondary" id="restart">New Game</button>
+
+</div>
+
+<div class="dice" id="dice">⚀ ⚀</div>
+
+<div id="board"></div>
+
+<div class="barline">
+
+<div class="barbox">⚪ Your bar: <b id="wbar">0</b></div>
+
+<div class="barbox">⚫ AI bar: <b id="bbar">0</b></div>
+
+</div>
+
+<div id="message">You play the light checkers.</div>
+
+<footer>Light moves toward point 1. Dark moves toward point 24.</footer>
+
+<script>
+
+(()=>{
+
+const boardEl=document.getElementById('board');
+
+const statusEl=document.getElementById('status');
+
+const diceEl=document.getElementById('dice');
+
+const messageEl=document.getElementById('message');
+
+const rollBtn=document.getElementById('roll');
+
+let p,bar,off,dice,turn,selected,gameOver,busy;
+
+function fresh(){
+
+ p=Array(24).fill(0);
+
+ p[23]=2;p[12]=5;p[7]=3;p[5]=5;
+
+ p[0]=-2;p[11]=-5;p[16]=-3;p[18]=-5;
+
+ bar={1:0,'-1':0};off={1:0,'-1':0};
+
+ dice=[];turn=1;selected=null;gameOver=false;busy=false;
+
+ messageEl.textContent='Your turn! Roll the dice.';
+
+ diceEl.textContent='—';
+
+ rollBtn.disabled=false;render();
+
+}
+
+function pip(n){return n===1?'⚀':n===2?'⚁':n===3?'⚂':n===4?'⚃':n===5?'⚄':'⚅'}
+
+function home(side,i){return side===1?i>=0&&i<=5:i>=18&&i<=23}
+
+function allHome(side){
+
+ for(let i=0;i<24;i++)if(p[i]*side<0)return false;
+
+ return bar[side]===0;
+
+}
+
+function destination(i,d,side){return i-side*d}
+
+function legalMoves(side,die){
+
+ let moves=[];
+
+ if(bar[side]>0){
+
+  let to=side===1?24-die:die-1;
+
+  if(to>=0&&to<24&&p[to]*side>=-1)moves.push({from:'bar',to,die});
+
+  return moves;
+
+ }
+
+ for(let i=0;i<24;i++){
+
+  if(p[i]*side<=0)continue;
+
+  let to=destination(i,die,side);
+
+  if(to>=0&&to<24){
+
+   if(p[to]*side>=-1)moves.push({from:i,to,die});
+
+  }else if(allHome(side)){
+
+   let exact=(side===1?i+1===die:24-i===die);
+
+   let overshoot=side===1?i+1<die:24-i<die;
+
+   if(exact)moves.push({from:i,to:'off',die});
+
+   else if(overshoot){
+
+    let farther=false;
+
+    if(side===1){for(let j=i+1;j<=5;j++)if(p[j]>0)farther=true;}
+
+    else{for(let j=18;j<i;j++)if(p[j]<0)farther=true;}
+
+    if(!farther)moves.push({from:i,to:'off',die});
+
+   }
+
+  }
+
+ }
+
+ return moves;
+
+}
+
+function available(){
+
+ let all=[];
+
+ for(let d of dice)all.push(...legalMoves(turn,d));
+
+ return all;
+
+}
+
+function apply(m,side){
+
+ if(m.from==='bar')bar[side]--;
+
+ else p[m.from]-=side;
+
+ if(m.to==='off')off[side]++;
+
+ else{
+
+  if(p[m.to]===-side){p[m.to]=0;bar[-side]++;}
+
+  p[m.to]+=side;
+
+ }
+
+ let idx=dice.indexOf(m.die);
+
+ if(idx>=0)dice.splice(idx,1);
+
+}
+
+function render(){
+
+ boardEl.innerHTML='';
+
+ let order=[];
+
+ for(let i=12;i<=23;i++)order.push(i);
+
+ for(let i=11;i>=0;i--)order.push(i);
+
+ order.forEach((i,n)=>{
+
+  const cell=document.createElement('div');
+
+  cell.className='point '+(n>=12?'bottom':'top')+(selected===i?' selected':'');
+
+  cell.onclick=()=>tap(i);
+
+  const tri=document.createElement('div');tri.className='triangle';cell.appendChild(tri);
+
+  const stack=document.createElement('div');stack.className='stack';
+
+  let count=Math.abs(p[i]),shown=Math.min(count,5);
+
+  for(let k=0;k<shown;k++){
+
+   let c=document.createElement('div');c.className='checker '+(p[i]>0?'white':'black');stack.appendChild(c);
+
+  }
+
+  cell.appendChild(stack);
+
+  if(count>5){let c=document.createElement('div');c.className='count';c.textContent=count;cell.appendChild(c);}
+
+  let label=document.createElement('div');label.className='label';label.textContent=i+1;cell.appendChild(label);
+
+  boardEl.appendChild(cell);
+
+ });
+
+ document.getElementById('wbar').textContent=bar[1];
+
+ document.getElementById('bbar').textContent=bar[-1];
+
+ statusEl.textContent=gameOver?'Game over':turn===1?'Your turn':"AI's turn";
+
+ rollBtn.disabled=gameOver||turn!==1||dice.length>0||busy;
+
+ diceEl.textContent=dice.length?dice.map(pip).join(' '):'—';
+
+}
+
+function tap(i){
+
+ if(gameOver||busy||turn!==1||dice.length===0)return;
+
+ let moves=available();
+
+ if(selected!==null){
+
+  let m=moves.find(x=>x.from===selected&&x.to===i);
+
+  if(m){apply(m,1);selected=null;afterMove();return;}
+
+ }
+
+ if(p[i]>0&&(bar[1]===0||selected==='bar')){
+
+  selected=i;messageEl.textContent='Now tap a highlighted destination.';render();
+
+ }else if(bar[1]>0){
+
+  selected='bar';
+
+  messageEl.textContent='You must enter from the bar first.';
+
+  render();
+
+ }else{
+
+  selected=null;messageEl.textContent='Choose one of your checkers.';render();
+
+ }
+
+}
+
+function afterMove(){
+
+ if(off[turn]===15){gameOver=true;messageEl.textContent=turn===1?'You win! 🎉':'The AI wins.';dice=[];render();return;}
+
+ if(dice.length===0||available().length===0){
+
+  dice=[];selected=null;
+
+  if(turn===1){turn=-1;messageEl.textContent='AI is thinking…';render();setTimeout(aiTurn,600);}
+
+  else{turn=1;messageEl.textContent='Your turn. Roll the dice.';render();}
+
+ }else{
+
+  messageEl.textContent='Make another move.';render();
+
+ }
+
+}
+
+function roll(){
+
+ if(gameOver||busy||turn!==1||dice.length)return;
+
+ let a=1+Math.floor(Math.random()*6),b=1+Math.floor(Math.random()*6);
+
+ dice=a===b?[a,a,a,a]:[a,b];
+
+ messageEl.textContent='Choose a checker to move.';
+
+ render();
+
+ if(available().length===0){
+
+  messageEl.textContent='No legal moves. Turn passes to AI.';
+
+  setTimeout(()=>{dice=[];turn=-1;render();setTimeout(aiTurn,500);},700);
+
+ }
+
+}
+
+function aiTurn(){
+
+ if(gameOver)return;
+
+ busy=true;render();
+
+ let a=1+Math.floor(Math.random()*6),b=1+Math.floor(Math.random()*6);
+
+ dice=a===b?[a,a,a,a]:[a,b];
+
+ diceEl.textContent=dice.map(pip).join(' ');
+
+ let steps=0;
+
+ function step(){
+
+  if(gameOver)return;
+
+  let moves=available();
+
+  if(!moves.length||!dice.length||steps++>4){
+
+   dice=[];busy=false;
+
+   if(off[-1]===15){gameOver=true;messageEl.textContent='AI wins.';render();return;}
+
+   turn=1;selected=null;messageEl.textContent='Your turn. Roll the dice.';render();return;
+
+  }
+
+  // Prefer hits, then bearing off, then moves that make a point.
+
+  moves.sort((x,y)=>score(y)-score(x));
+
+  let top=moves.slice(0,Math.min(4,moves.length));
+
+  let m=top[Math.floor(Math.random()*top.length)];
+
+  apply(m,-1);
+
+  if(off[-1]===15){gameOver=true;busy=false;dice=[];messageEl.textContent='The AI wins.';render();return;}
+
+  render();setTimeout(step,350);
+
+ }
+
+ function score(m){
+
+  let s=Math.random()*1.5;
+
+  if(m.to==='off')s+=10;
+
+  else if(p[m.to]===1)s+=7;
+
+  if(m.from==='bar')s+=5;
+
+  if(typeof m.to==='number'&&Math.abs(p[m.to])===1)s+=1;
+
+  return s;
+
+ }
+
+ step();
+
+}
+
+rollBtn.onclick=roll;
+
+document.getElementById('undo').onclick=()=>{selected=null;render();messageEl.textContent='Selection cleared.'};
+
+document.getElementById('restart').onclick=()=>{if(confirm('Start a new game?'))fresh()};
+
+fresh();
+
+})();
+
+</script>
+
+</body>
+
+</html>
